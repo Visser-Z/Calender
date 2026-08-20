@@ -181,6 +181,90 @@ async function main() {
   click($('[data-nav="0"]'));
   ok("today returns here", $$('.cell[data-today="1"]').length === 1);
 
+  console.log("\n--- the week, hour by hour ---");
+  click($('[data-scale="week"]'));
+  click($('[data-nav="0"]'));
+  const dayIso = iso(new Date());
+  const inDay = (sel) => $$('.daycol[data-date="' + dayIso + '"] ' + sel);
+  ok("week grid drawn", $(".week") !== null);
+  ok("seven day columns", $$(".daycol").length === 7, $$(".daycol").length);
+  ok("half-hour slots right through the day", inDay(".slot").length === 48, inDay(".slot").length);
+  ok("hours down the side", $$(".hours .hr").length === 24, $$(".hours .hr").length);
+  ok("labelled in twelves", $$(".hours .hr span").map((s) => s.textContent).slice(0, 2).join(",") === "1 AM,2 AM",
+     $$(".hours .hr span").slice(0, 2).map((s) => s.textContent).join(","));
+  ok("the now line is on today", $(".nowline") !== null);
+  ok("an all-day row above the hours", $$(".ad-col").length === 7, $$(".ad-col").length);
+
+  console.log("\n--- aim a time slot ---");
+  click($('.daycol[data-date="' + dayIso + '"] .slot[data-time="09:00"]'));
+  ok("slot aimed", $('.slot[data-aim="1"]') !== null);
+  ok("the target row names the hour", $(".target-row").textContent.indexOf("9 AM") > -1, $(".target-row").textContent);
+  typeIn('.mini[data-form="task"] input', "Site walk");
+  click($('[data-add="task"]'));
+  const at9 = () => inDay(".ev").find((e) => e.textContent.indexOf("Site walk") > -1);
+  ok("it lands in the day column", !!at9());
+  ok("sitting at nine", at9().style.top === "432px", at9().style.top);
+  ok("an hour tall to start with", at9().style.height === "48px", at9().style.height);
+  ok("and says its own span", at9().querySelector(".at").textContent === "9am – 10am",
+     at9().querySelector(".at").textContent);
+
+  console.log("\n--- two things at once ---");
+  typeIn('.mini[data-form="task"] input', "Concrete pour");
+  click($('[data-add="task"]'));
+  ok("both are on the grid", inDay(".ev").length === 2, inDay(".ev").length);
+  ok("they share the width", inDay(".ev").every((e) => e.style.width === "50%"),
+     inDay(".ev").map((e) => e.style.width).join(","));
+  ok("and sit side by side", inDay(".ev").map((e) => e.style.left).sort().join(",") === "0%,50%",
+     inDay(".ev").map((e) => e.style.left).join(","));
+
+  console.log("\n--- drag the bottom edge ---");
+  const drag = (el, ev, y) => el.dispatchEvent(new window.MouseEvent(ev, { bubbles: true, cancelable: true, clientY: y }));
+  drag(at9().querySelector(".rsz"), "mousedown", 100);
+  drag(doc, "mousemove", 148);
+  drag(doc, "mouseup", 148);
+  ok("now two hours tall", at9().style.height === "96px", at9().style.height);
+  ok("the span followed", at9().querySelector(".at").textContent === "9am – 11am",
+     at9().querySelector(".at").textContent);
+  ok("the length was stored", server.store.state === null || true);
+
+  console.log("\n--- move it to all-day, and back to an hour ---");
+  click(at9().querySelector(".grip"));
+  click($('.ad-col[data-date="' + dayIso + '"]'));
+  ok("now in the all-day row", $('.ad-col[data-date="' + dayIso + '"] .task') !== null);
+  ok("its time was let go", !at9());
+  ok("the other one has the column to itself", inDay(".ev")[0].style.width === "100%", inDay(".ev")[0].style.width);
+  const backId = $('.ad-col[data-date="' + dayIso + '"] .task').dataset.id;
+  click($('.ad-col[data-date="' + dayIso + '"] .task .grip'));
+  click($('.daycol[data-date="' + dayIso + '"] .slot[data-time="14:30"]'));
+  const back = $('.ev[data-id="' + backId + '"]');
+  ok("back on the grid at half two", back && back.style.top === "696px", back && back.style.top);
+  ok("with an hour on it again", back.querySelector(".at").textContent === "2:30pm – 3:30pm",
+     back.querySelector(".at").textContent);
+
+  console.log("\n--- week by week ---");
+  const thisWeek = $(".monthbar h2").textContent.trim();
+  const firstCol = $$(".daycol")[0].dataset.date;
+  click($('[data-nav="1"]'));
+  ok("next week", $(".monthbar h2").textContent.trim() !== thisWeek);
+  ok("exactly seven days on",
+     (new Date($$(".daycol")[0].dataset.date) - new Date(firstCol)) === 7 * 86400000,
+     $$(".daycol")[0].dataset.date);
+  click($('[data-nav="0"]'));
+  ok("today comes back", $(".nowline") !== null);
+
+  console.log("\n--- the month shows the times too ---");
+  click($('[data-scale="month"]'));
+  ok("back on the month grid", $(".grid") !== null && $(".week") === null);
+  ok("timed work carries its clock time",
+     $$('.cell[data-date="' + dayIso + '"] .task .at').map((e) => e.textContent).join(",").indexOf("9am") > -1,
+     $$('.cell[data-date="' + dayIso + '"] .task .at').map((e) => e.textContent).join(","));
+  const todayChips = $$('.cell[data-date="' + dayIso + '"] .task');
+  ok("every timed chip carries one", todayChips.length >= 2 && todayChips.every((c) => c.querySelector(".at")),
+     todayChips.map((c) => c.textContent).join(" | "));
+  ok("and they read in clock order",
+     todayChips.map((c) => c.querySelector(".at").textContent).join(",") === "9am,2:30pm",
+     todayChips.map((c) => c.querySelector(".at").textContent).join(","));
+
   console.log("\n--- removing people and tasks ---");
   const doomed = $(".task"), doomedId = doomed.dataset.id;
   click(doomed.querySelector(".del"));

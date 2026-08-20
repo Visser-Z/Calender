@@ -1,7 +1,7 @@
 # Who Does What
 
 A shared calendar and task divider for a small crew. Add the work, split it across
-the people, drop it on a day.
+the people, drop it on a day and an hour.
 
 No framework, no build step. Three static files and one serverless function.
 
@@ -9,6 +9,14 @@ No framework, no build step. Three static files and one serverless function.
 
 - **Month calendar** with unlimited forward and back navigation, today marked, and
   a tray for anything not yet scheduled.
+- **Week view with time slots**, the way a calendar you already know does it: the
+  hours down the side, the seven days across, half-hour slots to drop work into, an
+  all-day row above them, and a red line across today at the current time. Click a
+  date in the month grid to open its week.
+- **Give a task a time** by dropping it on a slot, or by aiming a slot and typing.
+  Drag the bottom edge of anything on the grid to say how long it takes, in quarter
+  hours. Two jobs at the same hour sit side by side rather than on top of each other.
+  Drop something back on the all-day row to take the time off it again.
 - **A crew of up to six**, each with their own colour. Rename anyone inline; their
   initials follow onto every task they own.
 - **Split evenly by person** hands every unassigned task to whoever is carrying the
@@ -17,13 +25,13 @@ No framework, no build step. Three static files and one serverless function.
 - **Spread across weekdays** deals the unscheduled pile onto the next ten weekdays,
   skipping weekends.
 - **Clear finished tasks** sweeps everything ticked off.
-- Move a task by dragging it onto a day, or tap its grip and click a day, which is
-  what you want on a phone.
+- Move a task by dragging it onto a day or a time slot, or tap its grip and then tap
+  where it should go, which is what you want on a phone.
 - Everyone with the link sees the same board. Saves happen a moment after you stop
   typing, and other people's edits arrive within about five seconds.
 
-Per-viewer things stay per viewer: the month you are looking at, the day you have
-aimed new tasks at, and the task you are holding are never shared.
+Per-viewer things stay per viewer: month or week, where you are in the calendar, the
+slot you have aimed new tasks at, and the task you are holding are never shared.
 
 ## Deploy it
 

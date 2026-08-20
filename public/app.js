@@ -12,6 +12,11 @@
   var DAY_S  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   var SLOTS  = ["p1","p2","p3","p4","p5","p6"];
 
+  var HOUR_PX = 48;            // must match --hh in app.css
+  var STEP    = 30;            // minutes per slot in the week grid
+  var SNAP    = 15;            // minutes a resize snaps to
+  var DEFAULT_MINS = 60;
+
   var SEED = { v: 1, people: [], tasks: [], seq: 0 };
 
   /* ---------- which board ---------- */
@@ -28,13 +33,25 @@
   var saveTimer = null, saving = false, saveState = "idle", lastSaved = "", deferSince = 0;
   var msg = "";
 
-  var view = { month: null, aim: null, held: null, over: null };
+  var view = { scale: "month", month: null, anchor: null, aim: null, aimTime: null, held: null, scroll: null };
   try {
     var savedView = JSON.parse(sessionStorage.getItem("wdw-view:" + boardName) || "null");
-    if (savedView) { view.month = savedView.month || null; view.aim = savedView.aim || null; }
+    if (savedView) {
+      view.month = savedView.month || null;
+      view.aim = savedView.aim || null;
+      view.aimTime = savedView.aimTime || null;
+      view.anchor = savedView.anchor || null;
+      if (savedView.scale === "week") view.scale = "week";
+      if (typeof savedView.scroll === "number") view.scroll = savedView.scroll;
+    }
   } catch (e) {}
   function saveView() {
-    try { sessionStorage.setItem("wdw-view:" + boardName, JSON.stringify({ month: view.month, aim: view.aim })); } catch (e) {}
+    try {
+      sessionStorage.setItem("wdw-view:" + boardName, JSON.stringify({
+        scale: view.scale, month: view.month, anchor: view.anchor,
+        aim: view.aim, aimTime: view.aimTime, scroll: view.scroll
+      }));
+    } catch (e) {}
   }
 
   /* ---------- helpers ---------- */
@@ -50,6 +67,22 @@
   function pretty(s) { var d = parseIso(s); return DAY_S[d.getDay()] + " " + d.getDate() + " " + MON_S[d.getMonth()]; }
   function clock() { return new Date().toTimeString().slice(0, 5); }
   function uid() { state.seq = (state.seq || 0) + 1; return "t" + Date.now().toString(36) + state.seq.toString(36); }
+
+  /* ---------- times ---------- */
+  function mins(hm) { return hm ? (+hm.slice(0, 2)) * 60 + (+hm.slice(3, 5)) : 0; }
+  function hhmm(m) { m = (m % 1440 + 1440) % 1440; return pad(Math.floor(m / 60)) + ":" + pad(m % 60); }
+  function fmtT(hm, compact) {
+    var m = mins(hm), h = Math.floor(m / 60), mi = m % 60;
+    var ap = h < 12 ? "am" : "pm", h12 = (h % 12) === 0 ? 12 : h % 12;
+    var body = h12 + (mi ? ":" + pad(mi) : "");
+    return compact ? body + ap : body + " " + ap.toUpperCase();
+  }
+  function taskMins(t) { return Math.max(SNAP, t.mins || DEFAULT_MINS); }
+  function prettyWhen(day, time) {
+    if (!day) return "Unscheduled";
+    return pretty(day) + (time ? ", " + fmtT(time) : "");
+  }
+  function nowMins() { var d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
 
   function person(id) {
     for (var i = 0; i < state.people.length; i++) if (state.people[i].id === id) return state.people[i];
@@ -74,6 +107,17 @@
     state.people.forEach(function (p) { used[p.id] = 1; });
     for (var i = 0; i < SLOTS.length; i++) if (!used[SLOTS[i]]) return SLOTS[i];
     return null;
+  }
+  // timed tasks first, in clock order, then the rest in the order they were added
+  function byTime(a, b) {
+    if (!!a.time !== !!b.time) return a.time ? -1 : 1;
+    if (a.time && a.time !== b.time) return mins(a.time) - mins(b.time);
+    return 0;
+  }
+  function onDay(iso, timed) {
+    return state.tasks.filter(function (t) {
+      return t.day === iso && (timed ? !!t.time : !t.time);
+    }).sort(byTime);
   }
 
   /* ---------- ops ---------- */
@@ -209,6 +253,7 @@
     if (mode !== "server" || saving || queued.length) return;
     var ae = document.activeElement;
     if (ae && ae.isContentEditable) return;   // never yank text out from under someone
+    if (dragging) return;                     // nor out from under a resize
 
     fetch(API, { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.configured || j.rev === rev) return;
@@ -218,7 +263,7 @@
     }).catch(function () {});
   }
 
-  /* ---------- rendering ---------- */
+  /* ---------- rendering: the month ---------- */
   function monthGrid(ym) {
     var y = +ym.slice(0, 4), m = +ym.slice(5, 7) - 1;
     var first = new Date(y, m, 1);
@@ -240,15 +285,17 @@
         '<div class="cell" data-date="' + iso + '" data-out="' + (d.getMonth() === m ? "0" : "1") + '"'
         + (iso === tod ? ' data-today="1"' : "")
         + (iso === view.aim ? ' data-aim="1"' : "")
-        + (iso === view.over ? ' data-over="1"' : "")
-        + '><span class="dnum">' + d.getDate() + "</span>"
-        + '<ul class="tasks">' + (byDay[iso] || []).map(chip).join("") + "</ul></div>"
+        + '><button class="dnum" type="button" data-week="' + iso + '" aria-label="Open the week of ' + pretty(iso) + '">'
+        + d.getDate() + "</button>"
+        + '<ul class="tasks">'
+        + (byDay[iso] || []).sort(byTime).map(function (t) { return chip(t, true); }).join("")
+        + "</ul></div>"
       );
     }
     return out.join("");
   }
 
-  function chip(t) {
+  function chip(t, withTime) {
     var who = t.who || "";
     var label = who ? initials((person(who) || {}).name) : "+";
     return '<li class="task" data-id="' + t.id + '" data-who="' + who + '" data-done="' + (t.done ? "1" : "0") + '"'
@@ -256,15 +303,134 @@
       + ' draggable="true">'
       + '<button class="grip" type="button" aria-label="Pick up task">⠿</button>'
       + '<button class="dot" type="button" aria-label="' + (t.done ? "Mark as not done" : "Mark done") + '"></button>'
+      + (withTime && t.time ? '<span class="at">' + esc(fmtT(t.time, true)) + "</span>" : "")
       + '<span class="ttl" contenteditable="true" draggable="false">' + esc(t.title) + "</span>"
       + '<button class="who" type="button" aria-label="Assign to the next person">' + esc(label) + "</button>"
       + '<button class="del" type="button" aria-label="Delete task">×</button>'
       + "</li>";
   }
 
+  /* ---------- rendering: the week, hour by hour ---------- */
+  function weekDays(anchor) {
+    var d = parseIso(anchor || today());
+    var lead = (d.getDay() + 6) % 7;
+    var start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - lead);
+    var out = [];
+    for (var i = 0; i < 7; i++) out.push(isoOf(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)));
+    return out;
+  }
+
+  // Anything that overlaps shares the width, side by side, the way a calendar does it.
+  function lay(list) {
+    var out = [], cluster = [], end = -1;
+    function flush() {
+      if (!cluster.length) return;
+      var cols = [];
+      cluster.forEach(function (it) {
+        for (var c = 0; c < cols.length; c++) {
+          if (cols[c] <= it.s) { it.col = c; cols[c] = it.e; return; }
+        }
+        it.col = cols.length;
+        cols.push(it.e);
+      });
+      cluster.forEach(function (it) { it.cols = cols.length; });
+      out = out.concat(cluster);
+      cluster = []; end = -1;
+    }
+    list.forEach(function (t) {
+      var it = { t: t, s: mins(t.time), e: mins(t.time) + taskMins(t) };
+      if (cluster.length && it.s >= end) flush();
+      cluster.push(it);
+      end = Math.max(end, it.e);
+    });
+    flush();
+    return out;
+  }
+
+  function ev(it) {
+    var t = it.t, who = t.who || "";
+    var label = who ? initials((person(who) || {}).name) : "+";
+    var top = it.s / 60 * HOUR_PX;
+    var h = Math.max((it.e - it.s) / 60 * HOUR_PX, 17);
+    var w = 100 / it.cols;
+    var span = fmtT(t.time, true) + " – " + fmtT(hhmm(it.e), true);
+    return '<div class="task ev" data-id="' + t.id + '" data-who="' + who + '" data-done="' + (t.done ? "1" : "0") + '"'
+      + (view.held === t.id ? ' data-held="1"' : "")
+      + (it.e - it.s < 45 ? ' data-short="1"' : "")
+      + ' draggable="true" style="top:' + top + "px;height:" + h + "px;left:" + (it.col * w) + "%;width:" + w + '%">'
+      + '<button class="grip" type="button" aria-label="Pick up task">⠿</button>'
+      + '<button class="dot" type="button" aria-label="' + (t.done ? "Mark as not done" : "Mark done") + '"></button>'
+      + '<span class="ttl" contenteditable="true" draggable="false">' + esc(t.title) + "</span>"
+      + '<span class="at">' + esc(span) + "</span>"
+      + '<button class="who" type="button" aria-label="Assign to the next person">' + esc(label) + "</button>"
+      + '<button class="del" type="button" aria-label="Delete task">×</button>'
+      + '<span class="rsz" data-rsz="' + t.id + '" title="Drag to change how long it takes"></span>'
+      + "</div>";
+  }
+
+  function dayCol(iso) {
+    var s = "";
+    for (var m = 0; m < 1440; m += STEP) {
+      var hm = hhmm(m);
+      s += '<div class="slot"' + (m % 60 ? ' data-half="1"' : "")
+        + ' data-date="' + iso + '" data-time="' + hm + '"'
+        + (view.aim === iso && view.aimTime === hm ? ' data-aim="1"' : "") + "></div>";
+    }
+    return '<div class="daycol" data-date="' + iso + '"' + (iso === today() ? ' data-today="1"' : "") + ">"
+      + s + lay(onDay(iso, true)).map(ev).join("") + "</div>";
+  }
+
+  function weekGrid() {
+    var days = weekDays(view.anchor), tod = today();
+
+    var head = '<div class="wk-head"><div class="gut"></div>'
+      + days.map(function (iso) {
+          var d = parseIso(iso);
+          return '<div class="wk-day"' + (iso === tod ? ' data-today="1"' : "") + ' data-date="' + iso + '">'
+            + '<span class="wd">' + DAY_S[d.getDay()] + "</span>"
+            + '<span class="wdn">' + d.getDate() + "</span></div>";
+        }).join("") + "</div>";
+
+    var allday = '<div class="wk-allday"><div class="gut"><span class="lbl">All day</span></div>'
+      + days.map(function (iso) {
+          return '<div class="ad-col" data-date="' + iso + '"'
+            + (view.aim === iso && !view.aimTime ? ' data-aim="1"' : "") + ">"
+            + '<ul class="tasks">' + onDay(iso, false).map(function (t) { return chip(t); }).join("")
+            + "</ul></div>";
+        }).join("") + "</div>";
+
+    var hours = '<div class="gut hours">';
+    for (var h = 0; h < 24; h++) {
+      hours += '<div class="hr">' + (h ? "<span>" + fmtT(pad(h) + ":00") + "</span>" : "") + "</div>";
+    }
+    hours += "</div>";
+
+    var now = "";
+    if (days.indexOf(tod) > -1) {
+      now = '<div class="nowline" style="top:' + Math.round(nowMins() / 60 * HOUR_PX * 10) / 10 + "px;--col:" + days.indexOf(tod) + '">'
+          + '<span class="nowdot"></span></div>';
+    }
+
+    return '<div class="week">' + head + allday
+      + '<div class="wk-body"><div class="wk-cols">' + hours + days.map(dayCol).join("") + now + "</div></div>"
+      + "</div>";
+  }
+
+  function heading() {
+    if (view.scale === "month") {
+      return MONTHS[+view.month.slice(5, 7) - 1] + ' <span class="yr">' + view.month.slice(0, 4) + "</span>";
+    }
+    var days = weekDays(view.anchor);
+    var a = parseIso(days[0]), b = parseIso(days[6]);
+    var left = a.getDate() + (a.getMonth() === b.getMonth() ? "" : " " + MON_S[a.getMonth()]);
+    return left + " – " + b.getDate() + " " + MON_S[b.getMonth()]
+      + ' <span class="yr">' + b.getFullYear() + "</span>";
+  }
+
   function render() {
     if (!view.month) view.month = today().slice(0, 7);
-    var y = view.month.slice(0, 4), m = +view.month.slice(5, 7) - 1;
+    if (!view.anchor) view.anchor = today();
+    var week = view.scale === "week";
     var inbox = state.tasks.filter(function (t) { return !t.day; });
     var done = state.tasks.filter(function (t) { return t.done; }).length;
     var un = state.tasks.filter(function (t) { return !t.who && !t.done; }).length;
@@ -272,7 +438,7 @@
     var html = '<div class="wrap">'
       + '<header class="top">'
       +   "<h1>Who Does What</h1>"
-      +   '<p class="tag">One shared board. Add the work, split it across the crew, drop it on a day.</p>'
+      +   '<p class="tag">One shared board. Add the work, split it across the crew, drop it on a day and an hour.</p>'
       +   '<div class="right">'
       +     '<span class="sum">' + (state.tasks.length
               ? state.tasks.length + " tasks · " + done + " done · " + un + " unassigned"
@@ -288,16 +454,26 @@
 
     html += '<div class="layout"><div class="months-col">'
       + '<div class="monthbar">'
-      +   '<button class="nav" type="button" data-nav="-1" aria-label="Previous month">‹</button>'
-      +   '<button class="nav" type="button" data-nav="1" aria-label="Next month">›</button>'
-      +   "<h2>" + MONTHS[m] + ' <span class="yr">' + y + "</span></h2>"
+      +   '<button class="nav" type="button" data-nav="-1" aria-label="' + (week ? "Previous week" : "Previous month") + '">‹</button>'
+      +   '<button class="nav" type="button" data-nav="1" aria-label="' + (week ? "Next week" : "Next month") + '">›</button>'
+      +   "<h2>" + heading() + "</h2>"
       +   '<button class="today" type="button" data-nav="0">Today</button>'
-      +   '<span class="hint">Click a day to aim new tasks at it</span>'
-      + "</div>"
-      + '<div class="months">'
-      +   '<div class="dow"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>'
-      +   '<div class="grid">' + monthGrid(view.month) + "</div>"
-      + "</div></div>";
+      +   '<div class="scale" role="group" aria-label="Calendar scale">'
+      +     '<button type="button" data-scale="month"' + (week ? "" : ' data-on="1"') + ">Month</button>"
+      +     '<button type="button" data-scale="week"' + (week ? ' data-on="1"' : "") + ">Week</button>"
+      +   "</div>"
+      +   '<span class="hint">' + (week
+              ? "Click a time slot to aim new tasks at it"
+              : "Click a day to aim at it, or a date to open its week") + "</span>"
+      + "</div>";
+
+    html += week
+      ? '<div class="months">' + weekGrid() + "</div>"
+      : '<div class="months">'
+        + '<div class="dow"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>'
+        + '<div class="grid">' + monthGrid(view.month) + "</div></div>";
+
+    html += "</div>";
 
     html += '<aside class="rail">'
       + '<section class="card">'
@@ -316,12 +492,14 @@
       +   '<div class="mini" data-form="person"><input type="text" placeholder="Add a name" autocomplete="off"><button type="button" data-add="person">Add</button></div>'
       + "</section>"
 
-      + '<section class="card" data-drop="inbox"' + (view.over === "inbox" ? ' data-over="1"' : "") + ">"
+      + '<section class="card" data-drop="inbox">'
       +   '<span class="lbl">Unscheduled</span>'
-      +   '<ul class="inbox">' + inbox.map(chip).join("") + "</ul>"
+      +   '<ul class="inbox">' + inbox.map(function (t) { return chip(t); }).join("") + "</ul>"
       +   (inbox.length ? "" : '<p class="empty">Nothing waiting. Add a task below.</p>')
       +   '<div class="mini" data-form="task"><input type="text" placeholder="What needs doing?" autocomplete="off"><button type="button" data-add="task">Add</button></div>'
-      +   '<p class="target-row">Goes to <b>' + (view.aim ? pretty(view.aim) : "Unscheduled") + "</b></p>"
+      +   '<p class="target-row">Goes to <b>' + esc(prettyWhen(view.aim, view.aimTime)) + "</b>"
+      +     (view.aimTime ? ' <button class="unaim" type="button" data-unaim="1">drop the time</button>' : "")
+      +   "</p>"
       + "</section>"
 
       + '<section class="card">'
@@ -339,11 +517,29 @@
           + (mode === "server"
               ? "Everyone with the link sees this board. Changes save themselves a moment after you stop, and other people's edits arrive within a few seconds. "
               : "")
-          + "The month you are looking at and the day you have aimed at stay yours alone."
+          + "The scale you are on, the slot you have aimed at and the task you are holding stay yours alone."
           + (boardName === "main" ? " Add <code>?board=name</code> to the address for a second, separate board." : " You are on the <b>" + esc(boardName) + "</b> board.")
           + "</footer></div>";
 
     document.getElementById("root").innerHTML = html;
+    overEl = null;
+    if (week) restoreScroll();
+  }
+
+  // The hour grid is a scroller and a re-render builds a fresh one, so put it back
+  // where it was - or on the working day, if this is the first look at it.
+  function restoreScroll() {
+    var body = document.querySelector(".wk-body");
+    if (!body) return;
+    var want = view.scroll;
+    if (want == null) want = Math.max(0, Math.min(nowMins() - 90, 8 * 60)) / 60 * HOUR_PX;
+    try { body.scrollTop = want; } catch (e) {}
+    body.addEventListener("scroll", function () { view.scroll = body.scrollTop; });
+  }
+
+  function tickNow() {
+    var line = document.querySelector(".nowline");
+    if (line) line.style.top = Math.round(nowMins() / 60 * HOUR_PX * 10) / 10 + "px";
   }
 
   function renderStatus() {
@@ -352,21 +548,32 @@
   }
   function say(t) { msg = t; renderStatus(); }
 
-  /* ---------- held task and aimed day ---------- */
+  /* ---------- held task, aimed slot ---------- */
   function pickUp(t) {
     var was = view.held === t.id;
     view.held = was ? null : t.id;
     render();
-    say(was ? "Put back down." : "Holding “" + t.title + "”. Click a day, or the Unscheduled box, to place it.");
+    say(was ? "Put back down." : "Holding “" + t.title + "”. Click a day, a time slot, or the Unscheduled box, to place it.");
   }
-  function place(id, day, label) {
+  // time: "HH:MM" to set one, null to clear it, undefined to leave it alone.
+  function place(id, day, time, label) {
     var t = task(id);
     view.held = null;
     if (!t) { render(); return; }
-    if (t.day === day) { render(); say("Already there."); return; }
-    if (day) view.month = day.slice(0, 7);
+    var sameTime = time === undefined || (t.time || null) === (time || null);
+    if (t.day === day && sameTime) { render(); say("Already there."); return; }
+
+    var patch = { day: day };
+    if (time !== undefined) {
+      patch.time = time || null;
+      patch.mins = time ? taskMins(t) : null;
+    }
+    if (day) {
+      if (view.scale === "week") view.anchor = day;
+      else view.month = day.slice(0, 7);
+    }
     saveView();
-    run({ type: "setTask", id: id, patch: { day: day } });
+    run({ type: "setTask", id: id, patch: patch });
     say("Moved to " + label + ".");
   }
   function cycleWho(t) {
@@ -374,6 +581,13 @@
     var order = [""].concat(state.people.map(function (p) { return p.id; }));
     var i = order.indexOf(t.who || "");
     run({ type: "setTask", id: t.id, patch: { who: order[(i + 1) % order.length] } });
+  }
+  function aimAt(day, time) {
+    var same = view.aim === day && (view.aimTime || null) === (time || null);
+    view.aim = same ? null : day;
+    view.aimTime = same ? null : (time || null);
+    saveView(); render();
+    say(view.aim ? "New tasks land on " + prettyWhen(view.aim, view.aimTime) + "." : "New tasks go to Unscheduled again.");
   }
 
   /* ---------- interactions (delegated, so a re-render never unhooks them) ---------- */
@@ -408,25 +622,58 @@
     var add = el.closest("[data-add]");
     if (add) { addFrom(add.dataset.add); return; }
 
+    var sc = el.closest("[data-scale]");
+    if (sc) { setScale(sc.dataset.scale); return; }
+
     var nav = el.closest("[data-nav]");
-    if (nav) { shiftMonth(+nav.dataset.nav); return; }
+    if (nav) { shiftView(+nav.dataset.nav); return; }
 
     var act = el.closest("[data-act]");
     if (act) { actions[act.dataset.act](); return; }
 
+    if (el.closest("[data-unaim]")) {
+      view.aimTime = null;
+      saveView(); render();
+      say("New tasks land on " + prettyWhen(view.aim, null) + ", with no time on them.");
+      return;
+    }
+
     var inboxCard = el.closest('[data-drop="inbox"]');
     if (inboxCard && !el.closest(".mini") && !el.closest(".task")) {
-      if (view.held) place(view.held, null, "Unscheduled");
+      if (view.held) place(view.held, null, null, "Unscheduled");
+      return;
+    }
+
+    // a date in the month grid opens that week
+    var wk = el.closest("[data-week]");
+    if (wk) {
+      view.anchor = wk.dataset.week;
+      view.scroll = null;
+      view.scale = "week";
+      saveView(); render();
+      say("Week of " + pretty(wk.dataset.week) + ".");
+      return;
+    }
+
+    var slot = el.closest(".slot");
+    if (slot) {
+      if (view.held) place(view.held, slot.dataset.date, slot.dataset.time, prettyWhen(slot.dataset.date, slot.dataset.time));
+      else aimAt(slot.dataset.date, slot.dataset.time);
+      return;
+    }
+
+    var ad = el.closest(".ad-col");
+    if (ad) {
+      if (view.held) place(view.held, ad.dataset.date, null, pretty(ad.dataset.date) + ", all day");
+      else aimAt(ad.dataset.date, null);
       return;
     }
 
     var cell = el.closest(".cell");
     if (cell) {
       var day = cell.dataset.date;
-      if (view.held) { place(view.held, day, pretty(day)); return; }
-      view.aim = view.aim === day ? null : day;
-      saveView(); render();
-      say(view.aim ? "New tasks land on " + pretty(day) + "." : "New tasks go to Unscheduled again.");
+      if (view.held) { place(view.held, day, undefined, pretty(day)); return; }
+      aimAt(day, null);
       return;
     }
   });
@@ -440,9 +687,11 @@
     input.value = "";
 
     if (which === "task") {
-      var t = { id: uid(), title: val, who: "", day: view.aim || null, done: false };
+      var at = view.aim ? view.aimTime : null;
+      var t = { id: uid(), title: val, who: "", day: view.aim || null, done: false,
+                time: at || null, mins: at ? DEFAULT_MINS : null };
       run({ type: "addTask", task: t });
-      say("Added to " + (t.day ? pretty(t.day) : "Unscheduled") + ".");
+      say("Added to " + prettyWhen(t.day, t.time) + ".");
     } else {
       var slot = freeSlot();
       if (!slot) { say("Six people is the limit on this board."); return; }
@@ -460,7 +709,7 @@
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
-      view.held = null; view.aim = null;
+      view.held = null; view.aim = null; view.aimTime = null;
       saveView(); render(); say("");
       return;
     }
@@ -506,45 +755,125 @@
   }, true);
 
   /* ---------- drag and drop ---------- */
+  var overEl = null;
+  function markOver(el) {
+    if (overEl === el) return;
+    if (overEl) overEl.removeAttribute("data-over");
+    overEl = el;
+    if (el) el.setAttribute("data-over", "1");
+  }
+
   document.addEventListener("dragstart", function (e) {
     var c = e.target && e.target.closest ? e.target.closest(".task") : null;
     if (!c) return;
     view.held = c.dataset.id;
     if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.dataset.id); }
   });
+
+  // Where a drop would land: a time slot, an all-day column, a month cell, or the tray.
   function zone(e) {
     if (!e.target || !e.target.closest) return null;
+    var slot = e.target.closest(".slot");
+    if (slot) return { el: slot, day: slot.dataset.date, time: slot.dataset.time,
+                       label: prettyWhen(slot.dataset.date, slot.dataset.time) };
+    var ad = e.target.closest(".ad-col");
+    if (ad) return { el: ad, day: ad.dataset.date, time: null, label: pretty(ad.dataset.date) + ", all day" };
     var cell = e.target.closest(".cell");
-    if (cell) return cell.dataset.date;
-    return e.target.closest('[data-drop="inbox"]') ? "inbox" : null;
+    if (cell) return { el: cell, day: cell.dataset.date, time: undefined, label: pretty(cell.dataset.date) };
+    var tray = e.target.closest('[data-drop="inbox"]');
+    if (tray) return { el: tray, day: null, time: null, label: "Unscheduled" };
+    return null;
   }
+
   document.addEventListener("dragover", function (e) {
     var z = zone(e);
     if (!z || !view.held) return;
     e.preventDefault();
-    if (view.over !== z) { view.over = z; render(); }
+    markOver(z.el);
   });
   document.addEventListener("drop", function (e) {
     var z = zone(e);
     if (!z || !view.held) return;
     e.preventDefault();
-    view.over = null;
-    place(view.held, z === "inbox" ? null : z, z === "inbox" ? "Unscheduled" : pretty(z));
+    markOver(null);
+    place(view.held, z.day, z.time, z.label);
   });
   document.addEventListener("dragend", function () {
-    if (view.over || view.held) { view.over = null; view.held = null; render(); }
+    markOver(null);
+    if (view.held) { view.held = null; render(); }
   });
 
-  /* ---------- dividing the work ---------- */
-  function shiftMonth(delta) {
-    if (delta === 0) view.month = today().slice(0, 7);
-    else {
+  /* ---------- drag the bottom edge to change how long something takes ---------- */
+  var dragging = null;
+  document.addEventListener("mousedown", function (e) {
+    var h = e.target && e.target.closest ? e.target.closest("[data-rsz]") : null;
+    if (!h) return;
+    var t = task(h.dataset.rsz);
+    var box = h.closest(".ev");
+    if (!t || !box) return;
+    e.preventDefault();
+    dragging = { id: t.id, box: box, y: e.clientY, from: taskMins(t), to: taskMins(t) };
+    box.setAttribute("data-sizing", "1");
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    var delta = (e.clientY - dragging.y) / HOUR_PX * 60;
+    if (!isFinite(delta)) return;
+    var t = task(dragging.id);
+    if (!t) return;
+    var next = Math.round((dragging.from + delta) / SNAP) * SNAP;
+    next = Math.max(SNAP, Math.min(next, 1440 - mins(t.time)));
+    if (next === dragging.to) return;
+    dragging.to = next;
+    dragging.box.style.height = Math.max(next / 60 * HOUR_PX, 17) + "px";
+    say("“" + t.title + "” " + fmtT(t.time, true) + " – " + fmtT(hhmm(mins(t.time) + next), true));
+  });
+  document.addEventListener("mouseup", function () {
+    if (!dragging) return;
+    var d = dragging;
+    dragging = null;
+    d.box.removeAttribute("data-sizing");
+    if (d.to === d.from) { render(); return; }
+    run({ type: "setTask", id: d.id, patch: { mins: d.to } });
+    var t = task(d.id);
+    if (t) say("“" + t.title + "” now runs " + fmtT(t.time, true) + " – " + fmtT(hhmm(mins(t.time) + d.to), true) + ".");
+  });
+
+  /* ---------- moving around ---------- */
+  function setScale(s) {
+    if (s === view.scale) return;
+    if (s === "week") {
+      var t = today();
+      view.anchor = (view.aim && view.aim.slice(0, 7) === view.month) ? view.aim
+        : (t.slice(0, 7) === view.month ? t : view.month + "-01");
+    } else {
+      view.month = (view.anchor || today()).slice(0, 7);
+    }
+    view.scale = s;
+    view.scroll = null;
+    saveView(); render();
+  }
+
+  function shiftView(delta) {
+    if (view.scale === "week") {
+      if (delta === 0) view.anchor = today();
+      else {
+        var a = parseIso(view.anchor);
+        view.anchor = isoOf(new Date(a.getFullYear(), a.getMonth(), a.getDate() + delta * 7));
+      }
+      view.month = view.anchor.slice(0, 7);
+    } else if (delta === 0) {
+      view.month = today().slice(0, 7);
+      view.anchor = today();
+    } else {
       var d = new Date(+view.month.slice(0, 4), +view.month.slice(5, 7) - 1 + delta, 1);
       view.month = d.getFullYear() + "-" + pad(d.getMonth() + 1);
+      view.anchor = view.month + "-01";
     }
     saveView(); render();
   }
 
+  /* ---------- dividing the work ---------- */
   var actions = {
     split: function () {
       if (!state.people.length) { say("Add someone to the crew first."); return; }
@@ -575,6 +904,7 @@
         return { type: "setTask", id: t.id, patch: { day: days[i % days.length] } };
       });
       view.month = days[0].slice(0, 7);
+      view.anchor = days[0];
       saveView();
       runMany(ops);
       var used = Math.min(days.length, pool.length);
@@ -598,6 +928,7 @@
   }
 
   render();
+  setInterval(tickNow, 30000);
 
   fetch(API, { cache: "no-store" })
     .then(function (r) { return r.json(); })
