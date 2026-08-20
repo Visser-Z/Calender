@@ -1,0 +1,12 @@
+{
+  "name": "who-does-what",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A shared calendar and task divider for a small crew.",
+  "scripts": {
+    "test": "node test/api.test.js && node test/board.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}
