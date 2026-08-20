@@ -131,11 +131,59 @@ async function main() {
   ok("weekends skipped", days.every((d) => { const w = new Date(d + "T00:00:00").getDay(); return w && w !== 6; }), days.join(","));
   ok("nothing in the past", days.every((d) => d >= iso(new Date())), days.join(","));
 
-  console.log("\n--- assign, finish, clear ---");
+  console.log("\n--- hand a task to somebody ---");
   const chip = $(".cell .task");
+  const chipId = chip.dataset.id;
   const was = chip.dataset.who;
+  const taskEl = (id) => $('.task[data-id="' + id + '"]');
   click(chip.querySelector(".who"));
-  ok("assignee cycles", $('.task[data-id="' + chip.dataset.id + '"]').dataset.who !== was);
+  ok("the picker opens", $(".whomenu") !== null);
+  ok("it lists the whole crew plus nobody", $$(".whomenu [data-assign]").length === 3,
+     $$(".whomenu [data-assign]").length);
+  ok("it names the task", $(".whomenu .lbl").textContent.indexOf(chip.querySelector(".ttl").textContent) > -1,
+     $(".whomenu .lbl").textContent);
+  ok("it ticks whoever has it now", ($(".whomenu [data-on]") || {}).dataset.assign === was,
+     ($(".whomenu [data-on]") || {}).dataset.assign);
+  ok("it shows what each is carrying", $$(".whomenu .load").length === 2,
+     $$(".whomenu .load").length);
+
+  const other = was === "p1" ? "p2" : "p1";
+  click($('.whomenu [data-assign="' + other + '"]'));
+  ok("picking a name assigns it", taskEl(chipId).dataset.who === other, taskEl(chipId).dataset.who);
+  ok("the picker closes behind it", $(".whomenu") === null);
+  ok("the badge shows their initials", taskEl(chipId).querySelector(".who").textContent ===
+     ($$(".person").find((p) => p.dataset.id === other).querySelector(".name").textContent
+        .split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()),
+     taskEl(chipId).querySelector(".who").textContent);
+  ok("it says who got it", $(".status").textContent.indexOf("goes to") > -1, $(".status").textContent);
+
+  click(taskEl(chipId).querySelector(".who"));
+  click($('.whomenu [data-assign=""]'));
+  ok("nobody yet puts it back", taskEl(chipId).dataset.who === "", taskEl(chipId).dataset.who);
+  ok("and the crew load drops", $$(".person .load").map((e) => +e.textContent).reduce((a, b) => a + b, 0) === 4,
+     $$(".person .load").map((e) => e.textContent).join(","));
+
+  console.log("\n--- other ways to hand it over ---");
+  click(taskEl(chipId).querySelector(".who"));
+  ok("picker open again", $(".whomenu") !== null);
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  ok("escape shuts it", $(".whomenu") === null);
+  ok("without dropping the aimed day or held task", taskEl(chipId) !== null);
+
+  const dropOn = (el, id) => {
+    taskEl(id).dispatchEvent(new window.MouseEvent("dragstart", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new window.MouseEvent("dragover", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new window.MouseEvent("drop", { bubbles: true, cancelable: true }));
+  };
+  dropOn($$(".person").find((p) => p.dataset.id === "p2"), chipId);
+  ok("dropping a task on a name assigns it", taskEl(chipId).dataset.who === "p2", taskEl(chipId).dataset.who);
+
+  click(taskEl(chipId).querySelector(".grip"));
+  click($$(".person").find((p) => p.dataset.id === "p1"));
+  ok("holding it and tapping a name works too", taskEl(chipId).dataset.who === "p1", taskEl(chipId).dataset.who);
+  ok("nothing left held", $('.task[data-held="1"]') === null);
+
+  console.log("\n--- finish and clear ---");
   const first = $(".cell .task");
   click(first.querySelector(".dot"));
   ok("marked done", $('.task[data-id="' + first.dataset.id + '"]').dataset.done === "1");

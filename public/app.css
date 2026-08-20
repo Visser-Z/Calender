@@ -303,3 +303,42 @@ footer.note{margin-top:28px; font-size:12px; color:var(--ink-3); max-width:78ch}
 }
 
 @media (max-width:940px){ .week{--gut:46px} }
+
+/* ---------- handing a task to somebody ---------- */
+.task .who{cursor:pointer}
+.task .who:hover{filter:brightness(1.12)}
+.task[data-who=""] .who:hover{border-color:var(--accent); color:var(--accent)}
+
+.person{border-radius:4px}
+.person[data-over="1"]{background:var(--accent-soft); box-shadow:inset 0 0 0 1px var(--accent)}
+
+.whomenu{
+  position:fixed; z-index:50; width:212px; padding:9px 8px 7px;
+  background:var(--panel); border:1px solid var(--rule-2); border-radius:6px;
+  box-shadow:0 2px 6px rgba(0,0,0,.09), 0 16px 40px -20px rgba(0,0,0,.55);
+}
+.whomenu > .lbl{
+  display:block; margin:0 4px 7px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.whomenu ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px}
+.whomenu button{
+  --c:var(--ink-3);
+  display:flex; align-items:center; gap:8px; width:100%; text-align:left;
+  padding:6px 7px; border-radius:4px; font-size:14px;
+}
+.whomenu button:hover{background:var(--sunk)}
+.whomenu button[data-on="1"]{background:var(--accent-soft); font-weight:600}
+.whomenu button[data-c="p1"]{--c:var(--c1)}
+.whomenu button[data-c="p2"]{--c:var(--c2)}
+.whomenu button[data-c="p3"]{--c:var(--c3)}
+.whomenu button[data-c="p4"]{--c:var(--c4)}
+.whomenu button[data-c="p5"]{--c:var(--c5)}
+.whomenu button[data-c="p6"]{--c:var(--c6)}
+.whomenu .swatch{width:9px; height:9px; border-radius:2px; flex:none; background:var(--c)}
+.whomenu button[data-c=""] .swatch{background:transparent; border:1px dashed var(--ink-3)}
+.whomenu .nm{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.whomenu .load{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--ink-2);
+  font-variant-numeric:tabular-nums; background:var(--sunk); border-radius:9px; padding:1px 7px; flex:none;
+}
+.whomenu button[data-on="1"] .load{background:var(--panel)}

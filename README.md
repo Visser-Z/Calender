@@ -19,6 +19,11 @@ No framework, no build step. Three static files and one serverless function.
   Drop something back on the all-day row to take the time off it again.
 - **A crew of up to six**, each with their own colour. Rename anyone inline; their
   initials follow onto every task they own.
+- **Hand a task to anyone, any time.** The coloured badge on a task opens a picker
+  with the whole crew, what each of them is already carrying, and Nobody yet to take
+  a name back off. It works the same on a chip in the month, an event in the week, or
+  something still in the tray. You can also drop a task straight onto a name in the
+  crew list, or tap its grip and then tap the name.
 - **Split evenly by person** hands every unassigned task to whoever is carrying the
   least, so nine tasks across three people come out 3/3/3 rather than blindly round
   robin.

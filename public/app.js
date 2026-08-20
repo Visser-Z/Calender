@@ -33,7 +33,8 @@
   var saveTimer = null, saving = false, saveState = "idle", lastSaved = "", deferSince = 0;
   var msg = "";
 
-  var view = { scale: "month", month: null, anchor: null, aim: null, aimTime: null, held: null, scroll: null };
+  var view = { scale: "month", month: null, anchor: null, aim: null, aimTime: null,
+               held: null, scroll: null, menu: null };
   try {
     var savedView = JSON.parse(sessionStorage.getItem("wdw-view:" + boardName) || "null");
     if (savedView) {
@@ -295,6 +296,47 @@
     return out.join("");
   }
 
+  // The badge on a task: whose it is, and the way to hand it to somebody else.
+  function whoButton(t, label) {
+    var open = view.menu && view.menu.id === t.id;
+    var name = t.who ? (person(t.who) || {}).name : null;
+    return '<button class="who" type="button" aria-haspopup="true" aria-expanded="' + (open ? "true" : "false") + '"'
+      + ' aria-label="' + esc(name ? name + " has this. Hand it to someone else" : "Nobody has this yet. Choose who does it") + '">'
+      + esc(label) + "</button>";
+  }
+
+  // Anchored to the badge and fixed to the window, so nothing clips it - not the
+  // week grid's scroller, not an event box with its own overflow.
+  function whoMenu() {
+    if (!view.menu) return "";
+    var t = task(view.menu.id);
+    if (!t) return "";
+    var row = function (id, name, count) {
+      return '<li><button type="button" data-assign="' + id + '" data-c="' + id + '"'
+        + ((t.who || "") === id ? ' data-on="1"' : "") + ">"
+        + '<span class="swatch"></span><span class="nm">' + esc(name) + "</span>"
+        + (count === null ? "" : '<span class="load">' + count + "</span>")
+        + "</button></li>";
+    };
+    return '<div class="whomenu" style="left:' + view.menu.x + "px;top:" + view.menu.y + 'px">'
+      + '<span class="lbl">Who does “' + esc(t.title) + "”</span>"
+      + "<ul>"
+      +   state.people.map(function (p) { return row(p.id, p.name, openLoad(p.id)); }).join("")
+      +   row("", "Nobody yet", null)
+      + "</ul></div>";
+  }
+
+  // Keep it on screen when the task is near an edge.
+  function fitMenu() {
+    var m = document.querySelector(".whomenu");
+    if (!m || !view.menu) return;
+    var r = m.getBoundingClientRect();
+    if (!r.width) return;                                  // no layout to work with
+    var w = window.innerWidth, h = window.innerHeight;
+    if (r.right > w - 8) m.style.left = Math.max(8, w - 8 - r.width) + "px";
+    if (r.bottom > h - 8) m.style.top = Math.max(8, view.menu.y - r.height - 26) + "px";
+  }
+
   function chip(t, withTime) {
     var who = t.who || "";
     var label = who ? initials((person(who) || {}).name) : "+";
@@ -305,7 +347,7 @@
       + '<button class="dot" type="button" aria-label="' + (t.done ? "Mark as not done" : "Mark done") + '"></button>'
       + (withTime && t.time ? '<span class="at">' + esc(fmtT(t.time, true)) + "</span>" : "")
       + '<span class="ttl" contenteditable="true" draggable="false">' + esc(t.title) + "</span>"
-      + '<button class="who" type="button" aria-label="Assign to the next person">' + esc(label) + "</button>"
+      + whoButton(t, label)
       + '<button class="del" type="button" aria-label="Delete task">×</button>'
       + "</li>";
   }
@@ -362,7 +404,7 @@
       + '<button class="dot" type="button" aria-label="' + (t.done ? "Mark as not done" : "Mark done") + '"></button>'
       + '<span class="ttl" contenteditable="true" draggable="false">' + esc(t.title) + "</span>"
       + '<span class="at">' + esc(span) + "</span>"
-      + '<button class="who" type="button" aria-label="Assign to the next person">' + esc(label) + "</button>"
+      + whoButton(t, label)
       + '<button class="del" type="button" aria-label="Delete task">×</button>'
       + '<span class="rsz" data-rsz="' + t.id + '" title="Drag to change how long it takes"></span>'
       + "</div>";
@@ -488,7 +530,9 @@
                 + "</li>";
             }).join("")
       +   "</ul>"
-      +   (state.people.length ? "" : '<p class="empty">Nobody on the board yet. Add the first name below.</p>')
+      +   (state.people.length
+              ? '<p class="empty">Tap the badge on any task to hand it over, or drop the task on a name.</p>'
+              : '<p class="empty">Nobody on the board yet. Add the first name below.</p>')
       +   '<div class="mini" data-form="person"><input type="text" placeholder="Add a name" autocomplete="off"><button type="button" data-add="person">Add</button></div>'
       + "</section>"
 
@@ -519,11 +563,12 @@
               : "")
           + "The scale you are on, the slot you have aimed at and the task you are holding stay yours alone."
           + (boardName === "main" ? " Add <code>?board=name</code> to the address for a second, separate board." : " You are on the <b>" + esc(boardName) + "</b> board.")
-          + "</footer></div>";
+          + "</footer>" + whoMenu() + "</div>";
 
     document.getElementById("root").innerHTML = html;
     overEl = null;
     if (week) restoreScroll();
+    fitMenu();
   }
 
   // The hour grid is a scroller and a re-render builds a fresh one, so put it back
@@ -576,11 +621,30 @@
     run({ type: "setTask", id: id, patch: patch });
     say("Moved to " + label + ".");
   }
-  function cycleWho(t) {
-    if (!state.people.length) { say("Add someone to the crew first."); return; }
-    var order = [""].concat(state.people.map(function (p) { return p.id; }));
-    var i = order.indexOf(t.who || "");
-    run({ type: "setTask", id: t.id, patch: { who: order[(i + 1) % order.length] } });
+  // Hand a task to somebody, or to nobody. Works wherever the task is sitting.
+  function assign(id, who) {
+    var t = task(id);
+    view.menu = null;
+    view.held = null;
+    if (!t) { render(); return; }
+    var name = who ? (person(who) || {}).name : null;
+    if ((t.who || "") === (who || "")) {
+      render();
+      say(name ? name + " already has “" + t.title + "”." : "“" + t.title + "” is already waiting for a name.");
+      return;
+    }
+    run({ type: "setTask", id: t.id, patch: { who: who || "" } });
+    say(name ? "“" + t.title + "” goes to " + name + "." : "“" + t.title + "” is back to nobody in particular.");
+  }
+
+  function openWho(t, btn) {
+    if (view.menu && view.menu.id === t.id) { view.menu = null; render(); return; }
+    if (!state.people.length) { say("Add someone to the crew first, then you can hand this to them."); return; }
+    var r = btn.getBoundingClientRect ? btn.getBoundingClientRect() : { left: 0, bottom: 0 };
+    view.menu = { id: t.id, x: Math.round(r.left), y: Math.round(r.bottom + 6) };
+    render();
+    var first = document.querySelector(".whomenu button");
+    if (first) first.focus();
   }
   function aimAt(day, time) {
     var same = view.aim === day && (view.aimTime || null) === (time || null);
@@ -595,12 +659,18 @@
     var el = e.target;
     if (!el || !el.closest) return;
 
+    var pick = el.closest("[data-assign]");
+    if (pick) { assign(view.menu ? view.menu.id : null, pick.dataset.assign); return; }
+
+    // any click outside the open menu puts it away, then carries on as normal
+    if (view.menu && !el.closest(".whomenu") && !el.closest(".who")) { view.menu = null; render(); }
+
     var chipEl = el.closest(".task");
     if (chipEl) {
       var t = task(chipEl.dataset.id);
       if (!t) return;
       if (el.closest(".dot")) { run({ type: "setTask", id: t.id, patch: { done: !t.done } }); return; }
-      if (el.closest(".who")) { cycleWho(t); return; }
+      if (el.closest(".who")) { openWho(t, el.closest(".who")); return; }
       if (el.closest(".del")) {
         if (view.held === t.id) view.held = null;
         run({ type: "delTask", id: t.id });
@@ -612,11 +682,15 @@
     }
 
     var pEl = el.closest(".person");
-    if (pEl && el.closest(".del-p")) {
-      var p = person(pEl.dataset.id);
-      run({ type: "delPerson", id: pEl.dataset.id });
-      say((p ? p.name : "That person") + " is off the board. Their tasks are unassigned again.");
-      return;
+    if (pEl) {
+      if (el.closest(".del-p")) {
+        var p = person(pEl.dataset.id);
+        run({ type: "delPerson", id: pEl.dataset.id });
+        say((p ? p.name : "That person") + " is off the board. Their tasks are unassigned again.");
+        return;
+      }
+      // holding a task and tapping a name hands it over, which is the phone gesture
+      if (view.held) { assign(view.held, pEl.dataset.id); return; }
     }
 
     var add = el.closest("[data-add]");
@@ -709,6 +783,7 @@
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
+      if (view.menu) { view.menu = null; render(); return; }   // shut the picker, keep the rest
       view.held = null; view.aim = null; view.aimTime = null;
       saveView(); render(); say("");
       return;
@@ -770,9 +845,12 @@
     if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.dataset.id); }
   });
 
-  // Where a drop would land: a time slot, an all-day column, a month cell, or the tray.
+  // Where a drop would land: somebody in the crew, a time slot, an all-day column,
+  // a month cell, or the tray.
   function zone(e) {
     if (!e.target || !e.target.closest) return null;
+    var pr = e.target.closest(".person");
+    if (pr) return { el: pr, assign: pr.dataset.id };
     var slot = e.target.closest(".slot");
     if (slot) return { el: slot, day: slot.dataset.date, time: slot.dataset.time,
                        label: prettyWhen(slot.dataset.date, slot.dataset.time) };
@@ -796,6 +874,7 @@
     if (!z || !view.held) return;
     e.preventDefault();
     markOver(null);
+    if (z.assign !== undefined) { assign(view.held, z.assign); return; }
     place(view.held, z.day, z.time, z.label);
   });
   document.addEventListener("dragend", function () {
